@@ -31,7 +31,13 @@ class ApiException extends \RuntimeException implements VariException
         $decoded = json_decode($body, true);
         if (is_array($decoded)) {
             $errorCode = is_string($decoded['code'] ?? null) ? $decoded['code'] : $errorCode;
-            $message = is_string($decoded['message'] ?? null) ? $decoded['message'] : '';
+            // Requests the API rejects before handling them (e.g. a field failing its
+            // schema) carry `error_message` instead of `code` and `message`.
+            $message = match (true) {
+                is_string($decoded['message'] ?? null) => $decoded['message'],
+                is_string($decoded['error_message'] ?? null) => $decoded['error_message'],
+                default => '',
+            };
         }
         if ($message === '') {
             $message = $body !== '' ? $body : sprintf('HTTP %d %s', $status, $errorCode);
