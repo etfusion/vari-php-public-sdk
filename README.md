@@ -87,7 +87,7 @@ Rules the API enforces:
 - If `showRelativeDate` is on, every row must have a `timestamp`.
 - A change to a list that would break those rules for existing rows is
   refused with `ConflictException`; update or clear the rows first.
-- A list holds at most 500 rows, and a client can have at most 50 lists.
+- A list holds at most 50 rows, and a client can have at most 50 lists.
 - Writing a row replaces it entirely: any field you leave out is cleared.
 
 | Method | |
@@ -103,9 +103,10 @@ Rules the API enforces:
 | `lists()->upsertRows($key, iterable $rows)` | Create or replace many rows. |
 | `lists()->deleteRow($key, $externalUniqueIdentifier)` | |
 
-`upsertRows()` sends rows in requests of 100. Each request is all-or-nothing:
-one invalid row rejects the whole request. With more than 100 rows, a failure
-leaves the rows from earlier requests written.
+`upsertRows()` writes up to 50 rows in one all-or-nothing request: one
+invalid row rejects them all. Passing more than 50 throws
+`InvalidArgumentException` without calling the API, and a write that would
+leave the list holding more than 50 rows gets `ConflictException`.
 
 ### Display order
 
@@ -187,6 +188,7 @@ Every exception implements `ETFusion\VARI\Exception\VariException`.
 | `PermissionDeniedException` | 403: the client's role lacks the scope (`stream:read` / `stream:write`). |
 | `NotFoundException` | 404: no such list, row or metric. |
 | `ConflictException` | 409: key in use, limit reached, or a list change that breaks its rows. |
+| `InvalidArgumentException` | Input the API would refuse, caught before sending (e.g. more than 50 rows). |
 | `RateLimitException` | 429. |
 | `ServerException` | 5xx. |
 | `ApiException` | Base class of the above: `getStatusCode()`, `getErrorCode()`, `getMessage()`. |
