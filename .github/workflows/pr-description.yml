@@ -1,0 +1,83 @@
+# Fails a pull request whose description does not fill in .github/pull_request_template.md.
+# Required by this repository's "protect-main" ruleset.
+#
+# A copy of etfusion/org-workflows' pr-description.yml, which the organization's "pr-template"
+# ruleset requires elsewhere: that repository is private, so its workflow cannot be required on
+# this public one. Keep the two in step.
+#
+name: PR description
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  template:
+    name: PR description
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The repository under review, template files only.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github
+            docs
+          sparse-checkout-cone-mode: false
+
+      # Dependabot PRs are exempt: Dependabot writes its own description (release notes and
+      # compatibility), nobody fills in the template before auto-merge queues them, and the
+      # change is a version bump the update's own checks already cover. The job still runs and
+      # passes, so the required check is satisfied rather than left pending.
+      # The description reaches the script through the environment, never interpolated into it:
+      # it is text anyone opening a pull request controls.
+      - name: Check every template section is filled in
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        shell: python
+        run: |
+          import os, re, sys
+
+          # The organization's standard headings, used only if the template file is missing.
+          DEFAULT = ["Why", "What changes", "Risk", "Testing", "Rollback"]
+          CANDIDATES = [
+              ".github/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE.md",
+              "pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
+              "docs/pull_request_template.md", "docs/PULL_REQUEST_TEMPLATE.md",
+          ]
+
+          def sections(markdown):
+              markdown = re.sub(r"<!--.*?-->", "", markdown, flags=re.DOTALL)
+              out, heading = {}, None
+              for line in markdown.splitlines():
+                  m = re.match(r"^##\s+(.+?)\s*$", line)
+                  if m:
+                      heading = m.group(1).lower()
+                      out[heading] = ""
+                  elif heading is not None:
+                      out[heading] += line + "\n"
+              return out
+
+          source = next((p for p in CANDIDATES if os.path.isfile(p)), None)
+          if source:
+              with open(source, encoding="utf-8") as f:
+                  required = list(sections(f.read()))
+          else:
+              source, required = "the organization's standard headings", [h.lower() for h in DEFAULT]
+
+          body = sections(os.environ.get("PR_BODY", "").replace("\r\n", "\n"))
+          missing = [h for h in required if h not in body]
+          empty = [h for h in required if h in body and not body[h].strip()]
+          for h in missing:
+              print(f"::error::Missing section: ## {h.capitalize()}")
+          for h in empty:
+              print(f"::error::Empty section: ## {h.capitalize()}")
+          names = ", ".join(h.capitalize() for h in required)
+          if missing or empty:
+              print(f"Fill in every section of {source}: {names}. Edit the description to re-run this check.")
+              sys.exit(1)
+          print(f"Every section of {source} is filled in.")
