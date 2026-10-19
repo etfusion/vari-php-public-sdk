@@ -28,6 +28,8 @@ final class Client
     /** A certificate's notBefore is set this many seconds before it is issued. */
     private const ISSUE_BACKDATE_SECONDS = 60;
 
+    /** @var callable|null */
+    private readonly mixed $handler;
     private readonly Transport $transport;
     private readonly CertificateFile $certificate;
     private ?Identity $identity = null;
@@ -48,19 +50,17 @@ final class Client
         private readonly string $certificatePath,
         private readonly string $privateKeyPath,
         private readonly string $baseUrl = Environment::PRODUCTION,
-        private readonly ?string $privateKeyPassphrase = null,
+        ?string $privateKeyPassphrase = null,
         private readonly ?string $tenantId = null,
         private readonly float $timeout = 30.0,
         private readonly int $newCertificateRetrySeconds = 15,
-        private readonly mixed $handler = null,
+        ?callable $handler = null,
         private readonly array $httpOptions = [],
     ) {
         if (!is_readable($privateKeyPath)) {
             throw new ConfigurationException(sprintf('Cannot read private key "%s".', $privateKeyPath));
         }
-        if ($handler !== null && !is_callable($handler)) {
-            throw new ConfigurationException('$handler must be a Guzzle handler or HandlerStack.');
-        }
+        $this->handler = $handler;
         $this->certificate = CertificateFile::read($certificatePath);
 
         $cert = $privateKeyPassphrase !== null ? [$certificatePath, $privateKeyPassphrase] : $certificatePath;
