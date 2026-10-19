@@ -39,7 +39,7 @@ jobs:
           php-version: ${{ matrix.php }}
           extensions: curl, json, openssl
           coverage: none
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@v4
         with:
           dependency-versions: ${{ matrix.deps }}
       - run: composer validate --strict
@@ -56,7 +56,7 @@ jobs:
         with:
           php-version: '8.4'
           coverage: none
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@v4
       # Fails on a known vulnerability in any package the SDK resolves to today.
       - run: composer audit
 
