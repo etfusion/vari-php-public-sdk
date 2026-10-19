@@ -1,0 +1,12 @@
+# Keeps the workflow actions current. Composer dependencies are deliberately not here:
+# Dependabot raises the constraints in composer.json, and for a library that would force
+# customers onto newer Guzzle versions. CI's weekly "highest" and audit runs cover them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]

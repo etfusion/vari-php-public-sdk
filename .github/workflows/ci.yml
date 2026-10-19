@@ -1,0 +1,69 @@
+# Tests and static analysis on every supported PHP version.
+#
+# "lowest" installs the oldest versions composer.json allows (e.g. Guzzle 7.5.0), so a
+# constraint that is too loose fails here rather than in a customer's project. The weekly
+# run catches a new upstream release that breaks the SDK while nothing here changed.
+#
+# The ruleset on main requires the "CI passed" job only, so the matrix can change without
+# editing the ruleset.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }} (${{ matrix.deps }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4']
+        deps: ['highest']
+        include:
+          - php: '8.1'
+            deps: 'lowest'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, openssl
+          coverage: none
+      - uses: ramsey/composer-install@v3
+        with:
+          dependency-versions: ${{ matrix.deps }}
+      - run: composer validate --strict
+      - run: vendor/bin/phpunit
+      - run: vendor/bin/phpstan analyse --no-progress
+
+  audit:
+    name: composer audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+      - uses: ramsey/composer-install@v3
+      # Fails on a known vulnerability in any package the SDK resolves to today.
+      - run: composer audit
+
+  passed:
+    name: CI passed
+    if: always()
+    needs: [test, audit]
+    runs-on: ubuntu-latest
+    steps:
+      - run: '[ "${{ contains(needs.*.result, ''failure'') || contains(needs.*.result, ''cancelled'') || contains(needs.*.result, ''skipped'') }}" = false ]'
