@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ETFusion\VARI\Resource;
 
+use ETFusion\VARI\Exception\InvalidArgumentException;
 use ETFusion\VARI\Internal\Path;
 use ETFusion\VARI\Internal\Transport;
 use ETFusion\VARI\Model\CustomList;
@@ -15,15 +16,15 @@ use ETFusion\VARI\Model\ListRow;
  *
  * A list sets the rules its rows follow: with badges, every row must name one
  * of them; with showRelativeDate, every row must carry a timestamp. A list
- * holds at most 500 rows. Rows are keyed by your externalUniqueIdentifier, and
+ * holds at most 50 rows. Rows are keyed by your externalUniqueIdentifier, and
  * writing a row with an existing identifier replaces it.
  *
  * Reads need the `stream:read` scope; writes need `stream:write`.
  */
 final class Lists
 {
-    /** Most rows a single batch write accepts. */
-    public const MAX_ROWS_PER_REQUEST = 100;
+    /** Most rows a list holds, and so the most one upsertRows() call accepts. */
+    public const MAX_ROWS = 50;
 
     /**
      * @param \Closure(): string $tenantId
@@ -163,15 +164,16 @@ final class Lists
     }
 
     /**
-     * Creates or replaces rows, returning them as written in request order.
-     *
-     * Rows are sent in requests of up to 100. Each request is all-or-nothing
-     * (one invalid row rejects it) and tells boards to refetch once; with more
-     * than 100 rows, a failure leaves earlier requests' rows written.
+     * Creates or replaces up to 50 rows in one all-or-nothing request: one
+     * invalid row rejects them all. Boards are told to refetch once. Returns
+     * the rows as written, in request order.
      *
      * @param iterable<ListRow> $rows
      *
      * @return list<ListRow>
+     *
+     * @throws InvalidArgumentException More than 50 rows were given.
+     * @throws \ETFusion\VARI\Exception\ConflictException The list would hold more than 50 rows.
      */
     public function upsertRows(string $key, iterable $rows): array
     {
@@ -179,17 +181,17 @@ final class Lists
         foreach ($rows as $row) {
             $batch[] = $row->toArray();
         }
-
-        $written = [];
-        foreach (array_chunk($batch, self::MAX_ROWS_PER_REQUEST) as $chunk) {
-            /** @var array{rows: list<array<string, mixed>>} $data */
-            $data = $this->transport->request('PUT', $this->path($key, 'rows'), ['rows' => $chunk]);
-            foreach ($data['rows'] as $row) {
-                $written[] = ListRow::fromArray($row);
-            }
+        if ($batch === []) {
+            return [];
+        }
+        if (count($batch) > self::MAX_ROWS) {
+            throw new InvalidArgumentException(sprintf('A list holds at most %d rows; %d were given.', self::MAX_ROWS, count($batch)));
         }
 
-        return $written;
+        /** @var array{rows: list<array<string, mixed>>} $data */
+        $data = $this->transport->request('PUT', $this->path($key, 'rows'), ['rows' => $batch]);
+
+        return array_map(ListRow::fromArray(...), $data['rows']);
     }
 
     /**

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ETFusion\VARI\Tests;
 
+use ETFusion\VARI\Exception\InvalidArgumentException;
+use ETFusion\VARI\Exception\VariException;
 use ETFusion\VARI\Model\ListRow;
 use ETFusion\VARI\Tests\Support\MockApi;
 use ETFusion\VARI\Tests\Support\TestCertificates;
@@ -138,32 +140,44 @@ final class ListsTest extends TestCase
         self::assertSame('INC/42 #1', $row->externalUniqueIdentifier);
     }
 
-    public function testUpsertRowsSendsBatchesOfOneHundred(): void
+    public function testUpsertRowsSendsOneRequest(): void
     {
         $rows = [];
-        for ($i = 0; $i < 250; $i++) {
+        for ($i = 0; $i < 50; $i++) {
             $rows[] = new ListRow((string) $i, 'Row ' . $i);
         }
-        foreach ([[0, 100], [100, 100], [200, 50]] as [$offset, $length]) {
-            $this->api->respond(200, ['rows' => array_map(
-                static fn (int $i): array => Fixtures::row((string) $i),
-                range($offset, $offset + $length - 1),
-            )]);
-        }
+        $this->api->respond(200, ['rows' => array_map(
+            static fn (int $i): array => Fixtures::row((string) $i),
+            range(0, 49),
+        )]);
 
         $written = $this->api->client($this->certs)->lists()->upsertRows('incidents', $rows);
 
-        self::assertSame(3, $this->api->count());
-        self::assertCount(250, $written);
-        self::assertSame('249', $written[249]->externalUniqueIdentifier);
+        self::assertSame(1, $this->api->count());
+        self::assertCount(50, $written);
+        self::assertSame('49', $written[49]->externalUniqueIdentifier);
+        self::assertSame('PUT', $this->api->request(0)->getMethod());
+        self::assertSame('/stable/v1/tenants/tenant-1/streams/lists/incidents/rows', $this->api->request(0)->getUri()->getPath());
 
-        $first = json_decode($this->api->body(0), true, 512, JSON_THROW_ON_ERROR);
-        self::assertCount(100, $first['rows']);
-        self::assertSame(['externalUniqueIdentifier' => '0', 'title' => 'Row 0'], $first['rows'][0]);
-        $last = json_decode($this->api->body(2), true, 512, JSON_THROW_ON_ERROR);
-        self::assertCount(50, $last['rows']);
-        self::assertSame('PUT', $this->api->request(2)->getMethod());
-        self::assertSame('/stable/v1/tenants/tenant-1/streams/lists/incidents/rows', $this->api->request(2)->getUri()->getPath());
+        $body = json_decode($this->api->body(0), true, 512, JSON_THROW_ON_ERROR);
+        self::assertCount(50, $body['rows']);
+        self::assertSame(['externalUniqueIdentifier' => '0', 'title' => 'Row 0'], $body['rows'][0]);
+    }
+
+    public function testUpsertRowsRefusesMoreThanFifty(): void
+    {
+        $rows = [];
+        for ($i = 0; $i < 51; $i++) {
+            $rows[] = new ListRow((string) $i, 'Row ' . $i);
+        }
+
+        try {
+            $this->api->client($this->certs)->lists()->upsertRows('incidents', $rows);
+            self::fail('expected an exception');
+        } catch (InvalidArgumentException $e) {
+            self::assertInstanceOf(VariException::class, $e);
+            self::assertSame(0, $this->api->count());
+        }
     }
 
     public function testUpsertRowsWithNoRowsSendsNothing(): void
