@@ -60,6 +60,23 @@ final class ErrorTest extends TestCase
         }
     }
 
+    public function testSchemaValidationErrorBody(): void
+    {
+        $certs = new TestCertificates();
+        $api = new MockApi();
+        $api->respond(400, ['error_message' => 'operation StreamMetricCreate: decode request: validate: invalid: key']);
+
+        try {
+            $api->client($certs)->metrics()->create('Bad Key', 'bad');
+            self::fail('expected an exception');
+        } catch (ValidationException $e) {
+            self::assertSame('operation StreamMetricCreate: decode request: validate: invalid: key', $e->getMessage());
+            self::assertSame('Bad Request', $e->getErrorCode());
+        } finally {
+            $certs->cleanUp();
+        }
+    }
+
     public function testNonJsonErrorBody(): void
     {
         $certs = new TestCertificates();
