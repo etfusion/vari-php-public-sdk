@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — unreleased
+## 1.0.0 — 2026-10-19
 
 - Client for the V-ARI Stable API over mutual TLS.
 - Identity, certificate rotation (`CertificateRotation::run`) and local key/CSR generation.
