@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 5
     steps:
       # The repository under review, template files only.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: |
             .github
