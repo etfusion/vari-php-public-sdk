@@ -1,4 +1,5 @@
-# On a vX.Y.Z tag: checks Client::VERSION matches the tag, then publishes a GitHub release.
+# On a vX.Y.Z tag: checks Client::VERSION matches the tag and the changelog entry is dated, then
+# publishes a GitHub release.
 # Packagist picks up the tag itself through its webhook.
 name: Release
 
@@ -23,6 +24,14 @@ jobs:
           version=$(sed -nE "s/.*const VERSION = '([^']+)'.*/\1/p" src/Client.php)
           if [ "$tag" != "$version" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match Client::VERSION $version"
+            exit 1
+          fi
+      - name: Check the changelog entry is dated
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          if ! grep -qE "^## ${tag//./\\.} — [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no dated entry for $tag"
             exit 1
           fi
       - name: Publish release
