@@ -211,6 +211,36 @@ final class CredentialsTest extends TestCase
         self::assertSame([], $this->leftovers());
     }
 
+    public function testFileStoreRecoveryKeepsOldKeyWhenCertificateCannotBeInstalled(): void
+    {
+        $oldKey = $this->certs->privateKeyPem();
+        // A directory in the certificate's place makes recovery's rename fail.
+        $certificatePath = $this->certs->dir . '/certificate-dir';
+        mkdir($certificatePath);
+        touch($certificatePath . '/placeholder');
+        // As if save() stopped after installing the key but before the certificate.
+        $pair = $this->certs->newPair();
+        rename($this->certs->privateKeyPath, $this->certs->privateKeyPath . '.old');
+        file_put_contents($this->certs->privateKeyPath, $pair['privateKeyPem']);
+        file_put_contents($certificatePath . '.new', $pair['certificatePem']);
+        $store = new FileCredentialStore($certificatePath, $this->certs->privateKeyPath);
+
+        try {
+            $store->load();
+            self::fail('expected an exception');
+        } catch (ConfigurationException $e) {
+            self::assertStringContainsString('.old', $e->getMessage());
+        }
+        self::assertSame($oldKey, file_get_contents($this->certs->privateKeyPath . '.old'));
+        self::assertFileExists($certificatePath . '.new');
+
+        // Once the certificate can be installed, the next load() finishes the job.
+        unlink($certificatePath . '/placeholder');
+        rmdir($certificatePath);
+        self::assertSame($pair['certificatePem'], $store->load()->certificatePem);
+        self::assertSame([], $this->leftovers());
+    }
+
     public function testFileStoreLoadFinishesSaveStoppedBeforeKeyInstall(): void
     {
         $pair = $this->certs->newPair();

@@ -4,6 +4,7 @@
 
 - `CertificateRotation::run()` loads the new credentials back from the store before confirming, so the old certificate is never disabled while the store holds something the next process cannot read.
 - `FileCredentialStore` locks a `.lock` file around `load()` and `save()`, so concurrent processes never read a half-replaced pair, and refuses to save a key its passphrase cannot read.
+- `FileCredentialStore` recovery of an interrupted save throws if it cannot move a file, keeping the old key in `.old` until the certificate is installed; the next `load()` retries.
 - The AWS Secrets Manager example store takes the key's passphrase and refuses keys it could not load.
 
 ## 1.0.1 — 2026-10-21
