@@ -9,6 +9,7 @@ use ETFusion\VARI\Exception\VariException;
 use ETFusion\VARI\Model\ListRow;
 use ETFusion\VARI\Tests\Support\MockApi;
 use ETFusion\VARI\Tests\Support\TestCertificates;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class ListsTest extends TestCase
@@ -194,5 +195,43 @@ final class ListsTest extends TestCase
 
         self::assertSame('DELETE', $this->api->request(0)->getMethod());
         self::assertSame('/stable/v1/tenants/tenant-1/streams/lists/incidents/rows/a', $this->api->request(0)->getUri()->getPath());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function dotSegments(): iterable
+    {
+        yield 'empty' => [''];
+        yield 'dot' => ['.'];
+        yield 'dot dot' => ['..'];
+    }
+
+    #[DataProvider('dotSegments')]
+    public function testRowIdentifierCannotChangeTheEndpoint(string $identifier): void
+    {
+        $lists = $this->api->client($this->certs)->lists();
+
+        foreach ([
+            static fn () => $lists->upsertRow('incidents', new ListRow($identifier, 'Row')),
+            static fn () => $lists->deleteRow('incidents', $identifier),
+        ] as $call) {
+            try {
+                $call();
+                self::fail('expected an exception');
+            } catch (InvalidArgumentException) {
+            }
+        }
+
+        self::assertSame(0, $this->api->count());
+    }
+
+    public function testDotsWithinIdentifierAreSent(): void
+    {
+        $this->api->respond(204);
+
+        $this->api->client($this->certs)->lists()->deleteRow('incidents', '...');
+
+        self::assertSame('/stable/v1/tenants/tenant-1/streams/lists/incidents/rows/...', $this->api->request(0)->getUri()->getPath());
     }
 }

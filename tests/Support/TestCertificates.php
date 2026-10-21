@@ -51,6 +51,31 @@ final class TestCertificates
         return $pem;
     }
 
+    public function certificatePem(): string
+    {
+        return (string) file_get_contents($this->certificatePath);
+    }
+
+    public function privateKeyPem(): string
+    {
+        return (string) file_get_contents($this->privateKeyPath);
+    }
+
+    /**
+     * A new key and a certificate for it, signed by the test CA.
+     *
+     * @return array{certificatePem: string, privateKeyPem: string}
+     */
+    public function newPair(?string $passphrase = null): array
+    {
+        $key = self::newKey();
+        $csr = openssl_csr_new(['commonName' => 'client'], $key, ['digest_alg' => 'sha256']);
+        \assert($csr instanceof \OpenSSLCertificateSigningRequest);
+        openssl_pkey_export($key, $keyPem, $passphrase);
+
+        return ['certificatePem' => $this->sign($csr, 90), 'privateKeyPem' => $keyPem];
+    }
+
     public function caPem(): string
     {
         openssl_x509_export($this->caCertificate, $pem);
@@ -61,7 +86,7 @@ final class TestCertificates
     public function cleanUp(): void
     {
         foreach (glob($this->dir . '/*') ?: [] as $file) {
-            unlink($file);
+            is_dir($file) ? rmdir($file) : unlink($file);
         }
         rmdir($this->dir);
     }

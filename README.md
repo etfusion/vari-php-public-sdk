@@ -7,37 +7,43 @@ V-ARI boards, and rotate your client certificate, authenticated by mutual TLS.
 composer require etfusion/vari-php-sdk
 ```
 
-Requires PHP 8.1+ with the `openssl` extension (and `curl`, recommended).
+Requires PHP 8.1+ with the `openssl` and `curl` extensions (libcurl 7.71 or later).
 
 ## Getting a certificate
 
 The Stable API authenticates with a client certificate instead of a token. A
-tenant admin creates an API client for you in V-ARI and gives you two files:
+tenant admin creates an API client for you in V-ARI and gives you the client
+certificate and its private key, both PEM.
 
-- `client.crt` — the client certificate (PEM)
-- `client.key` — its private key (PEM)
-
-Keep the key private, e.g. readable only by the user your integration runs as.
-Certificates last 90 days; see [Rotating the certificate](#rotating-the-certificate).
+Put them in your secret manager (Vault, AWS Secrets Manager, GCP Secret
+Manager, ...) rather than in files on the server, ideally together in one
+secret. The SDK takes them from memory and hands them to cURL without writing
+them to disk. Certificates last 90 days; see
+[Rotating the certificate](#rotating-the-certificate).
 
 ## Quick start
 
 ```php
 use ETFusion\VARI\Client;
+use ETFusion\VARI\Credentials;
 
-$vari = new Client('/etc/vari/client.crt', '/etc/vari/client.key');
+$vari = new Client(Credentials::fromPem($certificatePem, $privateKeyPem));
 
 $identity = $vari->identity();
 echo $identity->client->name, ' on tenant ', $identity->client->tenantId, PHP_EOL;
 print_r($identity->scopes); // e.g. ["stream:read", "stream:write"]
 ```
 
+`Credentials::fromPem()` checks that the key belongs to the certificate, and
+takes a third argument for an encrypted key's passphrase. `var_dump()` and
+`print_r()` show the key redacted.
+
 The client talks to production by default. Pass a base URL for another environment:
 
 ```php
 use ETFusion\VARI\Environment;
 
-$vari = new Client($cert, $key, Environment::STAGING);
+$vari = new Client($credentials, Environment::STAGING);
 ```
 
 A certificate only works in the environment that issued it.
@@ -47,12 +53,18 @@ A certificate only works in the environment that issued it.
 | Argument | Default | |
 |---|---|---|
 | `baseUrl` | `Environment::PRODUCTION` | |
-| `privateKeyPassphrase` | `null` | For an encrypted key. |
 | `tenantId` | looked up | Your tenant. Fetched once with `identity()` when omitted. |
 | `timeout` | `30.0` | Seconds. |
 | `newCertificateRetrySeconds` | `15` | See [Retries](#retries). `0` disables. |
 | `handler` | Guzzle default | A Guzzle handler or `HandlerStack`, to add middleware (logging, retries). |
 | `httpOptions` | `[]` | Extra [Guzzle request options](https://docs.guzzlephp.org/en/stable/request-options.html), e.g. `proxy`. |
+
+### Local development
+
+`Credentials::fromFiles($certificatePath, $privateKeyPath)` reads PEM files,
+and `FileCredentialStore` keeps rotated credentials in them (key mode 0600).
+Use a secret manager in production: a key in a file tends to get copied,
+backed up and left readable.
 
 ## Custom lists
 
@@ -137,41 +149,71 @@ widget.
 
 ## Rotating the certificate
 
-Rotate well before the certificate expires. `CertificateRotation::run()` does
-the whole flow:
+Rotate well before the certificate expires. `CertificateRotation::run()`
+does the whole flow:
 
-1. generates a new key and CSR locally (the private key never leaves your machine),
+1. generates a new key and CSR locally (the private key never leaves your process),
 2. has V-ARI sign it,
-3. replaces your certificate and key files,
+3. saves the new certificate and key to your credential store,
 4. confirms the rotation with the new certificate, which disables the old one.
 
 ```php
 use ETFusion\VARI\CertificateRotation;
 
 if ($vari->certificateExpiresWithin(30)) {
-    $vari = CertificateRotation::run($vari)->client;
+    $vari = CertificateRotation::run($vari, $store)->client;
 }
 ```
 
-Run it from the job that already uses the client, or a daily cron. The
-process needs write access to the certificate and key files (or pass other
-paths: `CertificateRotation::run($vari, $newCertPath, $newKeyPath)`).
+Run it from the job that already uses the client, or a daily cron.
 
-If several servers share one certificate, rotate on one of them and copy the
-new files to the others promptly: confirming the rotation stops the old
-certificate working immediately. To keep the old certificate working through
-its grace period (24 hours by default) instead, call the steps yourself and
-skip the confirm:
+### Credential stores
+
+A store is how rotation saves the new credentials. Implement
+`ETFusion\VARI\CredentialStore` over your secret manager:
 
 ```php
+interface CredentialStore
+{
+    public function load(): Credentials;
+    public function save(Credentials $credentials): void;
+}
+```
+
+`save()` must replace the certificate and key together, so nothing ever reads
+the new certificate with the old key. Keeping both in one secret does that.
+[examples/AwsSecretsManagerStore.php](examples/AwsSecretsManagerStore.php)
+is a complete store for AWS Secrets Manager, and
+[examples/sync-incidents.php](examples/sync-incidents.php) uses it.
+
+If `save()` fails, `run()` throws `RotationException` without
+confirming. The new certificate is already issued and the old one cannot be
+rotated again, but keeps working until `$e->issued->previousValidUntil` (24
+hours by default). The exception holds the new credentials in
+`$e->credentials`: save them some other way before then, or ask a tenant admin
+for a new certificate.
+
+If confirming fails, the new credentials are already saved and the old
+certificate keeps working until its grace period ends; confirm later with a
+client for the new credentials.
+
+### Sharing a certificate
+
+If several servers share one certificate, have them all load it from the same
+store: confirming the rotation stops the old certificate working immediately.
+To keep the old certificate working through its grace period instead, call the
+steps yourself and skip the confirm:
+
+```php
+use ETFusion\VARI\Credentials;
 use ETFusion\VARI\KeyPair;
 
 $pair = KeyPair::generate();
 $issued = $vari->certificates()->rotate($pair->csrPem);
-// Save $issued->certificatePem and $pair->privateKeyPem, distribute them,
-// then optionally confirm from a client using the new certificate:
-$new = $vari->withCertificate($newCertPath, $newKeyPath);
-$new->certificates()->confirmRotation();
+$credentials = Credentials::fromPem($issued->certificatePem, $pair->privateKeyPem);
+$store->save($credentials);
+// Once every server has picked them up, optionally:
+$vari->withCredentials($credentials)->certificates()->confirmRotation();
 ```
 
 A certificate can only be rotated once; rotating it again gets
@@ -193,7 +235,8 @@ Every exception implements `ETFusion\VARI\Exception\VariException`.
 | `ServerException` | 5xx. |
 | `ApiException` | Base class of the above: `getStatusCode()`, `getErrorCode()`, `getMessage()`. |
 | `TransportException` | No HTTP response: network, timeout, or a TLS handshake the server rejected (e.g. an expired certificate). |
-| `ConfigurationException` | Certificate or key file missing or unreadable. |
+| `ConfigurationException` | Certificate or key unusable: not PEM, wrong passphrase, not a matching pair, or a file missing. |
+| `RotationException` | A new certificate was issued but the credential store could not save it. See [Credential stores](#credential-stores). |
 
 ```php
 use ETFusion\VARI\Exception\ConflictException;

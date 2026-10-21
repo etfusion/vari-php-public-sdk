@@ -7,11 +7,11 @@ namespace ETFusion\VARI\Internal;
 use ETFusion\VARI\Exception\ConfigurationException;
 
 /**
- * Validity window of a PEM client certificate on disk.
+ * Validity window of a PEM client certificate.
  *
  * @internal
  */
-final class CertificateFile
+final class CertificateValidity
 {
     private function __construct(
         public readonly \DateTimeImmutable $notBefore,
@@ -19,16 +19,14 @@ final class CertificateFile
     ) {
     }
 
-    public static function read(string $path): self
+    /**
+     * @param string $source Names the certificate in the error message.
+     */
+    public static function parse(string $pem, string $source = 'The client certificate'): self
     {
-        $pem = @file_get_contents($path);
-        if ($pem === false) {
-            throw new ConfigurationException(sprintf('Cannot read client certificate "%s".', $path));
-        }
-
         $parsed = @openssl_x509_parse($pem);
         if ($parsed === false || !isset($parsed['validFrom_time_t'], $parsed['validTo_time_t'])) {
-            throw new ConfigurationException(sprintf('"%s" is not a PEM certificate.', $path));
+            throw new ConfigurationException(sprintf('%s is not a PEM certificate.', $source));
         }
 
         return new self(

@@ -4,20 +4,20 @@ declare(strict_types=1);
 
 namespace ETFusion\VARI;
 
-use ETFusion\VARI\Exception\ConfigurationException;
+use ETFusion\VARI\Exception\RotationException;
 use ETFusion\VARI\Model\RetiredCertificate;
 use ETFusion\VARI\Model\RotatedCertificate;
 
 /**
  * Rotates a client's certificate end to end: generates a new key locally,
- * has V-ARI sign it, installs the new certificate and key over the old files,
- * and confirms the rotation with the new certificate so the old one stops
- * working immediately.
+ * has V-ARI sign it, saves the new certificate and key to your credential
+ * store, and confirms the rotation with the new certificate so the old one
+ * stops working immediately.
  *
  * Run it from a scheduled job well before the certificate expires:
  *
  *     if ($vari->certificateExpiresWithin(30)) {
- *         $vari = CertificateRotation::run($vari)->client;
+ *         $vari = CertificateRotation::run($vari, $store)->client;
  *     }
  */
 final class CertificateRotation
@@ -32,54 +32,32 @@ final class CertificateRotation
     }
 
     /**
-     * @param ?string $certificatePath Where to write the new certificate. Defaults to the client's current file.
-     * @param ?string $privateKeyPath Where to write the new key (mode 0600). Defaults to the client's current file.
      * @param ?string $passphrase Encrypts the new private key when given.
      *
-     * If confirmation fails, the new certificate is already installed and the
-     * old one keeps working until its grace period ends; call
-     * `certificates()->confirmRotation()` with a client for the new files.
+     * If confirmation fails, the new certificate is already saved and the old
+     * one keeps working until its grace period ends; call
+     * `certificates()->confirmRotation()` with a client for the new credentials.
+     *
+     * @throws RotationException The new certificate was issued but `$store` could not save it. The exception
+     *                           holds the new credentials; save them before the old certificate's grace period ends.
      */
     public static function run(
         Client $client,
-        ?string $certificatePath = null,
-        ?string $privateKeyPath = null,
+        CredentialStore $store,
         #[\SensitiveParameter] ?string $passphrase = null,
     ): self {
-        $certificatePath ??= $client->certificatePath();
-        $privateKeyPath ??= $client->privateKeyPath();
-
         $keyPair = KeyPair::generate($passphrase);
         $issued = $client->certificates()->rotate($keyPair->csrPem);
+        $credentials = Credentials::fromPem($issued->certificatePem, $keyPair->privateKeyPem, $passphrase);
 
-        // Stage both files first so a failed write leaves the old pair intact.
-        $stagedKey = self::stage($privateKeyPath, $keyPair->privateKeyPem, 0600);
-        $stagedCertificate = self::stage($certificatePath, $issued->certificatePem, 0644);
-        self::install($stagedKey, $privateKeyPath);
-        self::install($stagedCertificate, $certificatePath);
-
-        $rotated = $client->withCertificate($certificatePath, $privateKeyPath, $passphrase);
-        $retired = $rotated->certificates()->confirmRotation();
-
-        return new self($rotated, $issued, $retired);
-    }
-
-    private static function stage(string $path, string $contents, int $mode): string
-    {
-        $staged = $path . '.new';
-        if (@file_put_contents($staged, '') === false || !@chmod($staged, $mode)
-            || @file_put_contents($staged, $contents) === false) {
-            @unlink($staged);
-            throw new ConfigurationException(sprintf('Cannot write "%s".', $staged));
+        try {
+            $store->save($credentials);
+        } catch (\Throwable $e) {
+            throw new RotationException($credentials, $issued, $e);
         }
 
-        return $staged;
-    }
+        $rotated = $client->withCredentials($credentials);
 
-    private static function install(string $staged, string $path): void
-    {
-        if (!@rename($staged, $path)) {
-            throw new ConfigurationException(sprintf('Cannot move "%s" to "%s".', $staged, $path));
-        }
+        return new self($rotated, $issued, $rotated->certificates()->confirmRotation());
     }
 }
