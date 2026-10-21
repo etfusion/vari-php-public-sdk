@@ -1,9 +1,19 @@
 # Changelog
 
-## 1.0.0 — 2026-10-21
+## 1.0.1 — Unreleased
 
-- Client for the V-ARI Stable API over mutual TLS. The certificate and key are `Credentials` loaded from your secret manager, handed to cURL in memory and never written to disk.
-- Identity, certificate rotation (`CertificateRotation::run`) and local key/CSR generation. Rotation saves the new certificate and key through a `CredentialStore` you implement over your secret manager. If saving fails, `RotationException` carries the new credentials.
-- `FileCredentialStore` and `Credentials::fromFiles()` for local development.
+Breaking changes to 1.0.0, released as a patch because 1.0.0 had no users.
+
+- The client takes `Credentials` instead of file paths: `new Client(Credentials::fromPem($certificatePem, $privateKeyPem))`. Load them from your secret manager; cURL gets them from memory and nothing is written to disk. `withCertificate()`, `certificatePath()` and `privateKeyPath()` are replaced by `withCredentials()` and `credentials()`.
+- `CertificateRotation::run($client, $store)` saves the new certificate and key through a `CredentialStore` you implement, instead of writing files. If saving fails, `RotationException` carries the new credentials so they are not lost.
+- `FileCredentialStore` and `Credentials::fromFiles()` for local development. The store puts the old key back if the certificate cannot be installed, and `load()` finishes a save that was interrupted part way.
+- `ext-curl` is now required. Guzzle's stream handler cannot present a separate key, so authentication never worked without it.
+- Keys and row identifiers that are empty, `.` or `..` throw `InvalidArgumentException`. They used to address a different endpoint.
+- The sync example deletes closed incidents before writing new ones, so a full list has room.
+
+## 1.0.0 — 2026-10-19
+
+- Client for the V-ARI Stable API over mutual TLS.
+- Identity, certificate rotation (`CertificateRotation::run`) and local key/CSR generation.
 - Stream metrics: list, create, update, set value, delete.
 - Custom lists (up to 50 rows each): list, get, create, update, delete, clear, and row list/upsert/batch upsert/delete.
