@@ -16,6 +16,10 @@ use ETFusion\VARI\Exception\ConfigurationException;
  * certificate, and puts the old key back if the second step fails. If the
  * process stops between the two, the staged certificate is left beside the
  * old one and load() finishes the install.
+ *
+ * load() and save() hold an exclusive lock on a `.lock` file next to the key,
+ * so concurrent processes never read a half-replaced pair. flock() is
+ * unreliable on some network filesystems; keep the files on a local disk.
  */
 final class FileCredentialStore implements CredentialStore
 {
@@ -34,12 +38,27 @@ final class FileCredentialStore implements CredentialStore
 
     public function load(): Credentials
     {
-        $this->finishInterruptedSave();
+        return $this->locked(function (): Credentials {
+            $this->finishInterruptedSave();
 
-        return Credentials::fromFiles($this->certificatePath, $this->privateKeyPath, $this->passphrase);
+            return Credentials::fromFiles($this->certificatePath, $this->privateKeyPath, $this->passphrase);
+        });
     }
 
+    /**
+     * @throws ConfigurationException This store's passphrase cannot read the key, or a file cannot be written.
+     */
     public function save(Credentials $credentials): void
+    {
+        // Installing a key load() cannot read would strand the new certificate.
+        Credentials::fromPem($credentials->certificatePem, $credentials->privateKeyPem, $this->passphrase);
+
+        $this->locked(function () use ($credentials): void {
+            $this->replace($credentials);
+        });
+    }
+
+    private function replace(Credentials $credentials): void
     {
         $stagedKey = $this->privateKeyPath . '.new';
         $stagedCertificate = $this->certificatePath . '.new';
@@ -83,6 +102,35 @@ final class FileCredentialStore implements CredentialStore
         }
 
         @unlink($oldKey);
+    }
+
+    /**
+     * Runs `$operation` holding the store's lock.
+     *
+     * @template T
+     *
+     * @param \Closure(): T $operation
+     *
+     * @return T
+     */
+    private function locked(\Closure $operation): mixed
+    {
+        $path = $this->privateKeyPath . '.lock';
+        $lock = @fopen($path, 'c');
+        if ($lock === false) {
+            throw new ConfigurationException(sprintf('Cannot open lock file "%s".', $path));
+        }
+
+        try {
+            if (!flock($lock, LOCK_EX)) {
+                throw new ConfigurationException(sprintf('Cannot lock "%s".', $path));
+            }
+
+            return $operation();
+        } finally {
+            // Closing releases the lock. The file stays: deleting it would let two processes lock different files.
+            fclose($lock);
+        }
     }
 
     /**

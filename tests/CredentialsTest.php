@@ -92,6 +92,73 @@ final class CredentialsTest extends TestCase
         self::assertSame([], $this->leftovers());
     }
 
+    public function testFileStoreRoundTripsEncryptedKey(): void
+    {
+        $store = new FileCredentialStore($this->certs->certificatePath, $this->certs->privateKeyPath, 'secret');
+        $pair = $this->certs->newPair('secret');
+
+        $store->save(Credentials::fromPem($pair['certificatePem'], $pair['privateKeyPem'], 'secret'));
+
+        $loaded = $store->load();
+        self::assertSame($pair['privateKeyPem'], $loaded->privateKeyPem);
+        self::assertSame('secret', $loaded->passphrase);
+    }
+
+    public function testFileStoreRefusesKeyItCannotReload(): void
+    {
+        $oldKey = $this->certs->privateKeyPem();
+        $store = new FileCredentialStore($this->certs->certificatePath, $this->certs->privateKeyPath, 'other');
+        $pair = $this->certs->newPair('secret');
+
+        try {
+            $store->save(Credentials::fromPem($pair['certificatePem'], $pair['privateKeyPem'], 'secret'));
+            self::fail('expected an exception');
+        } catch (ConfigurationException) {
+        }
+
+        self::assertSame($oldKey, $this->certs->privateKeyPem());
+        self::assertSame([], $this->leftovers());
+    }
+
+    public function testFileStoreReadersNeverSeeAHalfReplacedPair(): void
+    {
+        // Another process saves alternating pairs while this one loads.
+        $pairs = [$this->certs->newPair(), $this->certs->newPair()];
+        file_put_contents($this->certs->dir . '/pairs.json', json_encode($pairs, JSON_THROW_ON_ERROR));
+        $writer = $this->certs->dir . '/writer.php';
+        file_put_contents($writer, sprintf(<<<'PHP'
+            <?php
+            require %s;
+            $pairs = json_decode(file_get_contents(%s), true);
+            $store = new ETFusion\VARI\FileCredentialStore(%s, %s);
+            for ($i = 0; $i < 200; $i++) {
+                $pair = $pairs[$i %% 2];
+                $store->save(ETFusion\VARI\Credentials::fromPem($pair['certificatePem'], $pair['privateKeyPem']));
+            }
+            PHP,
+            var_export(dirname(__DIR__) . '/vendor/autoload.php', true),
+            var_export($this->certs->dir . '/pairs.json', true),
+            var_export($this->certs->certificatePath, true),
+            var_export($this->certs->privateKeyPath, true),
+        ));
+
+        $process = proc_open([PHP_BINARY, $writer], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($process);
+        $store = new FileCredentialStore($this->certs->certificatePath, $this->certs->privateKeyPath);
+        do {
+            // Credentials::fromPem() throws if the key does not belong to the certificate.
+            $store->load();
+        } while (proc_get_status($process)['running']);
+        $output = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        proc_close($process);
+
+        self::assertSame('', $output);
+        self::assertContains($this->certs->certificatePem(), array_column($pairs, 'certificatePem'));
+        self::assertSame([], $this->leftovers());
+    }
+
     public function testFileStoreStagingFailureLeavesOldPair(): void
     {
         $oldKey = $this->certs->privateKeyPem();

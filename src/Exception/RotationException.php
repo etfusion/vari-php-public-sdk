@@ -8,7 +8,8 @@ use ETFusion\VARI\Credentials;
 use ETFusion\VARI\Model\RotatedCertificate;
 
 /**
- * V-ARI issued a new certificate but the credential store could not save it.
+ * V-ARI issued a new certificate but the credential store could not save it,
+ * or did not load it back.
  *
  * The old certificate keeps working until `$issued->previousValidUntil`, and
  * cannot be rotated again. Save `$credentials` some other way before then, or
@@ -22,7 +23,7 @@ final class RotationException extends \RuntimeException implements VariException
         \Throwable $previous,
     ) {
         parent::__construct(sprintf(
-            'A new certificate was issued but could not be saved: %s The old certificate keeps working until %s.',
+            'A new certificate was issued but could not be saved and read back: %s The old certificate keeps working until %s.',
             $previous->getMessage(),
             $issued->previousValidUntil->format(\DateTimeInterface::ATOM),
         ), 0, $previous);
