@@ -263,7 +263,10 @@ composer test
 composer analyse
 ```
 
-Releases are tagged `vX.Y.Z`; Packagist picks up new tags automatically.
+To release, bump `Client::VERSION` and date its `CHANGELOG.md` entry
+(`## X.Y.Z — YYYY-MM-DD`) in one pull request; CI fails until the entry is
+dated. After it merges, tag `vX.Y.Z` on `main`; Packagist picks up new tags
+automatically.
 
 ## License
 

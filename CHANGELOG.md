@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.1 — Unreleased
+## 1.0.1 — 2026-10-21
 
 Breaking changes to 1.0.0, released as a patch because 1.0.0 had no users.
 
