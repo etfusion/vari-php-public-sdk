@@ -124,6 +124,21 @@ final class CertificateRotationTest extends TestCase
         self::assertSame(1, $this->api->count(), 'not confirmed');
     }
 
+    public function testDoesNotConfirmWhenStoreCannotLoadWhatItSaved(): void
+    {
+        $store = $this->store(dropPassphrase: true);
+        $this->respondWithSignedCertificate();
+
+        try {
+            CertificateRotation::run($this->api->clientFromCredentials($store->load()), $store, 'secret');
+            self::fail('expected an exception');
+        } catch (RotationException $e) {
+            self::assertSame('secret', $e->credentials->passphrase);
+        }
+
+        self::assertSame(1, $this->api->count(), 'the old certificate was not disabled');
+    }
+
     public function testConfirmationFailureLeavesNewCredentialsSaved(): void
     {
         $store = $this->store();
@@ -170,15 +185,27 @@ final class CertificateRotationTest extends TestCase
     /**
      * A store in memory, holding the test certificate.
      */
-    private function store(bool $failSave = false): CredentialStore
+    /**
+     * @param bool $dropPassphrase Saves the key but not its passphrase, so load() cannot read it.
+     */
+    private function store(bool $failSave = false, bool $dropPassphrase = false): CredentialStore
     {
-        return new class (Credentials::fromPem($this->certs->certificatePem(), $this->certs->privateKeyPem()), $failSave) implements CredentialStore {
-            public function __construct(private Credentials $credentials, private readonly bool $failSave)
-            {
+        $initial = Credentials::fromPem($this->certs->certificatePem(), $this->certs->privateKeyPem());
+
+        return new class ($initial, $failSave, $dropPassphrase) implements CredentialStore {
+            public function __construct(
+                private Credentials $credentials,
+                private readonly bool $failSave,
+                private readonly bool $dropPassphrase,
+            ) {
             }
 
             public function load(): Credentials
             {
+                if ($this->dropPassphrase) {
+                    return Credentials::fromPem($this->credentials->certificatePem, $this->credentials->privateKeyPem);
+                }
+
                 return $this->credentials;
             }
 

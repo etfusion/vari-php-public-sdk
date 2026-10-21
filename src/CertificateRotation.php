@@ -38,8 +38,13 @@ final class CertificateRotation
      * one keeps working until its grace period ends; call
      * `certificates()->confirmRotation()` with a client for the new credentials.
      *
-     * @throws RotationException The new certificate was issued but `$store` could not save it. The exception
-     *                           holds the new credentials; save them before the old certificate's grace period ends.
+     * The new credentials are read back from `$store` before confirming, so the
+     * old certificate is never disabled while the store holds something the
+     * next process cannot load.
+     *
+     * @throws RotationException The new certificate was issued but `$store` could not save it, or did not load
+     *                           it back. The exception holds the new credentials; save them before the old
+     *                           certificate's grace period ends.
      */
     public static function run(
         Client $client,
@@ -52,11 +57,15 @@ final class CertificateRotation
 
         try {
             $store->save($credentials);
+            $saved = $store->load();
+            if (openssl_x509_fingerprint($saved->certificatePem, 'sha256') !== openssl_x509_fingerprint($credentials->certificatePem, 'sha256')) {
+                throw new \UnexpectedValueException('The store loaded a different certificate than it saved.');
+            }
         } catch (\Throwable $e) {
             throw new RotationException($credentials, $issued, $e);
         }
 
-        $rotated = $client->withCredentials($credentials);
+        $rotated = $client->withCredentials($saved);
 
         return new self($rotated, $issued, $rotated->certificates()->confirmRotation());
     }
