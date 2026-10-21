@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ETFusion\VARI;
 
 use ETFusion\VARI\Exception\ConfigurationException;
-use ETFusion\VARI\Internal\CertificateFile;
+use ETFusion\VARI\Internal\CertificateValidity;
 use ETFusion\VARI\Internal\Transport;
 use ETFusion\VARI\Model\Identity;
 use ETFusion\VARI\Resource\Certificates;
@@ -18,7 +18,7 @@ use GuzzleHttp\HandlerStack;
  * Client for the V-ARI Stable API, authenticated by a client certificate
  * (mutual TLS).
  *
- *     $vari = new Client('/etc/vari/client.crt', '/etc/vari/client.key');
+ *     $vari = new Client(Credentials::fromPem($certificatePem, $privateKeyPem));
  *     $vari->metrics()->setValue('open-tickets', 42);
  */
 final class Client
@@ -31,40 +31,47 @@ final class Client
     /** @var callable|null */
     private readonly mixed $handler;
     private readonly Transport $transport;
-    private readonly CertificateFile $certificate;
+    private readonly CertificateValidity $certificate;
     private ?Identity $identity = null;
 
     /**
-     * @param string $certificatePath PEM file holding the client certificate V-ARI issued.
-     * @param string $privateKeyPath PEM file holding its private key.
+     * @param Credentials $credentials The client certificate and key, from your secret manager. They stay in memory.
      * @param string $baseUrl See {@see Environment}.
-     * @param ?string $privateKeyPassphrase For an encrypted private key.
      * @param ?string $tenantId The certificate's tenant. Looked up with identity() on first use when omitted.
      * @param float $timeout Seconds to wait for a response.
      * @param int $newCertificateRetrySeconds A new certificate can take a few seconds to be accepted in every
      *                                        region; a 401 within this many seconds of issue is retried. 0 disables.
      * @param ?callable $handler Guzzle handler or HandlerStack, e.g. to add middleware or mock responses.
      * @param array<string, mixed> $httpOptions Extra Guzzle request options, e.g. `proxy` or `verify`.
+     *
+     * @throws ConfigurationException The curl extension cannot take a certificate from memory (libcurl < 7.71).
      */
     public function __construct(
-        private readonly string $certificatePath,
-        private readonly string $privateKeyPath,
+        private readonly Credentials $credentials,
         private readonly string $baseUrl = Environment::PRODUCTION,
-        ?string $privateKeyPassphrase = null,
         private readonly ?string $tenantId = null,
         private readonly float $timeout = 30.0,
         private readonly int $newCertificateRetrySeconds = 15,
         ?callable $handler = null,
         private readonly array $httpOptions = [],
     ) {
-        if (!is_readable($privateKeyPath)) {
-            throw new ConfigurationException(sprintf('Cannot read private key "%s".', $privateKeyPath));
+        if (!\defined('CURLOPT_SSLCERT_BLOB')) {
+            throw new ConfigurationException('The curl extension must be built with libcurl 7.71 or later.');
         }
         $this->handler = $handler;
-        $this->certificate = CertificateFile::read($certificatePath);
+        $this->certificate = CertificateValidity::parse($credentials->certificatePem);
 
-        $cert = $privateKeyPassphrase !== null ? [$certificatePath, $privateKeyPassphrase] : $certificatePath;
-        $key = $privateKeyPassphrase !== null ? [$privateKeyPath, $privateKeyPassphrase] : $privateKeyPath;
+        // The certificate and key go to cURL from memory and are never written to disk.
+        $curl = array_replace(
+            is_array($httpOptions['curl'] ?? null) ? $httpOptions['curl'] : [],
+            array_filter([
+                \CURLOPT_SSLCERT_BLOB => $credentials->certificatePem,
+                \CURLOPT_SSLCERTTYPE => 'PEM',
+                \CURLOPT_SSLKEY_BLOB => $credentials->privateKeyPem,
+                \CURLOPT_SSLKEYTYPE => 'PEM',
+                \CURLOPT_KEYPASSWD => $credentials->passphrase,
+            ], static fn (?string $value): bool => $value !== null),
+        );
 
         $http = new GuzzleClient(array_replace(
             [
@@ -75,8 +82,7 @@ final class Client
             $httpOptions,
             [
                 'base_uri' => rtrim($baseUrl, '/') . '/',
-                'cert' => $cert,
-                'ssl_key' => $key,
+                'curl' => $curl,
                 'http_errors' => false,
                 'handler' => $handler ?? HandlerStack::create(),
             ],
@@ -90,18 +96,13 @@ final class Client
     }
 
     /**
-     * The same client presenting a different certificate, e.g. after rotation.
+     * The same client presenting other credentials, e.g. after rotation.
      */
-    public function withCertificate(
-        string $certificatePath,
-        string $privateKeyPath,
-        #[\SensitiveParameter] ?string $privateKeyPassphrase = null,
-    ): self {
+    public function withCredentials(Credentials $credentials): self
+    {
         return new self(
-            $certificatePath,
-            $privateKeyPath,
+            $credentials,
             $this->baseUrl,
-            $privateKeyPassphrase,
             $this->tenantId ?? $this->identity?->client->tenantId,
             $this->timeout,
             $this->newCertificateRetrySeconds,
@@ -148,18 +149,16 @@ final class Client
         return new Lists($this->transport, $this->tenantId(...));
     }
 
-    public function certificatePath(): string
+    /**
+     * The certificate and key this client presents.
+     */
+    public function credentials(): Credentials
     {
-        return $this->certificatePath;
-    }
-
-    public function privateKeyPath(): string
-    {
-        return $this->privateKeyPath;
+        return $this->credentials;
     }
 
     /**
-     * When the presented certificate expires, read from the certificate file.
+     * When the presented certificate expires.
      */
     public function certificateExpiresAt(): \DateTimeImmutable
     {

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ETFusion\VARI\Tests;
 
 use ETFusion\VARI\Client;
-use ETFusion\VARI\Exception\ConfigurationException;
+use ETFusion\VARI\Credentials;
 use ETFusion\VARI\Exception\TransportException;
 use ETFusion\VARI\Tests\Support\MockApi;
 use ETFusion\VARI\Tests\Support\TestCertificates;
@@ -67,20 +67,6 @@ final class ClientTest extends TestCase
         self::assertTrue($client->certificateExpiresWithin(120));
     }
 
-    public function testMissingKeyFile(): void
-    {
-        $this->expectException(ConfigurationException::class);
-
-        new Client($this->certs->certificatePath, $this->certs->dir . '/missing.key');
-    }
-
-    public function testNotACertificate(): void
-    {
-        $this->expectException(ConfigurationException::class);
-
-        new Client($this->certs->privateKeyPath, $this->certs->privateKeyPath);
-    }
-
     public function testConnectionFailure(): void
     {
         $this->api->mock->append(new ConnectException('handshake failed', new Request('GET', 'identity')));
@@ -97,9 +83,45 @@ final class ClientTest extends TestCase
         $history = [];
         $stack->push(\GuzzleHttp\Middleware::history($history));
 
-        $client = new Client($this->certs->certificatePath, $this->certs->privateKeyPath, \ETFusion\VARI\Environment::STAGING, handler: $stack);
+        $client = new Client(Credentials::fromPem($this->certs->certificatePem(), $this->certs->privateKeyPem()), \ETFusion\VARI\Environment::STAGING, handler: $stack);
         $client->identity();
 
         self::assertSame('https://api.staging.v-ari.com:8443/stable/v1/identity', (string) $history[0]['request']->getUri());
+    }
+
+    public function testPresentsCertificateFromMemory(): void
+    {
+        $this->api->respond(200, Fixtures::identity());
+        $pair = $this->certs->newPair('secret');
+        $credentials = Credentials::fromPem($pair['certificatePem'], $pair['privateKeyPem'], 'secret');
+
+        $client = $this->api->clientFromCredentials($credentials, httpOptions: ['curl' => [CURLOPT_SSL_VERIFYSTATUS => true]]);
+        $client->identity();
+
+        $curl = $this->api->options(0)['curl'];
+        self::assertIsArray($curl);
+        self::assertSame($pair['certificatePem'], $curl[CURLOPT_SSLCERT_BLOB]);
+        self::assertSame($pair['privateKeyPem'], $curl[CURLOPT_SSLKEY_BLOB]);
+        self::assertSame('secret', $curl[CURLOPT_KEYPASSWD]);
+        self::assertTrue($curl[CURLOPT_SSL_VERIFYSTATUS], 'caller curl options are kept');
+        self::assertArrayNotHasKey('cert', $this->api->options(0));
+        self::assertArrayNotHasKey('ssl_key', $this->api->options(0));
+        self::assertFalse($client->certificateExpiresWithin(30));
+        self::assertTrue($client->certificateExpiresWithin(120));
+    }
+
+    public function testWithCredentialsKeepsTenant(): void
+    {
+        $this->api->respond(200, Fixtures::identity());
+        $this->api->respond(200, ['metrics' => []]);
+
+        $client = $this->api->client($this->certs, tenantId: null);
+        $client->identity();
+        $pair = $this->certs->newPair();
+        $client->withCredentials(Credentials::fromPem($pair['certificatePem'], $pair['privateKeyPem']))->metrics()->list();
+
+        self::assertSame(2, $this->api->count());
+        self::assertSame('/stable/v1/tenants/tenant-from-identity/streams/metrics', $this->api->request(1)->getUri()->getPath());
+        self::assertSame($pair['certificatePem'], $this->api->options(1)['curl'][CURLOPT_SSLCERT_BLOB]);
     }
 }
