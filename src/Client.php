@@ -23,7 +23,7 @@ use GuzzleHttp\HandlerStack;
  */
 final class Client
 {
-    public const VERSION = '1.0.0';
+    public const VERSION = '1.0.1';
 
     /** A certificate's notBefore is set this many seconds before it is issued. */
     private const ISSUE_BACKDATE_SECONDS = 60;
