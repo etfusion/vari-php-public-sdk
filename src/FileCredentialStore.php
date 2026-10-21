@@ -135,12 +135,17 @@ final class FileCredentialStore implements CredentialStore
 
     /**
      * Completes a save() whose process stopped part way, so the key and
-     * certificate on disk match again.
+     * certificate on disk match again. The old key stays in `.old` until the
+     * certificate is installed; a failed step throws and is retried by the
+     * next load().
+     *
+     * @throws ConfigurationException A file could not be moved into place.
      */
     private function finishInterruptedSave(): void
     {
         $stagedCertificate = $this->certificatePath . '.new';
         $stagedKey = $this->privateKeyPath . '.new';
+        $oldKey = $this->privateKeyPath . '.old';
         if (!is_file($stagedCertificate)) {
             return;
         }
@@ -148,12 +153,32 @@ final class FileCredentialStore implements CredentialStore
 
         // Stopped before installing the key, after both were fully staged.
         if (is_file($stagedKey) && $this->matches($certificate, $stagedKey)) {
-            @rename($stagedKey, $this->privateKeyPath);
+            // save() may have stopped before backing up the old key.
+            if (!is_file($oldKey) && is_file($this->privateKeyPath)) {
+                $old = @file_get_contents($this->privateKeyPath);
+                if ($old === false) {
+                    throw new ConfigurationException(sprintf('Cannot read "%s".', $this->privateKeyPath));
+                }
+                self::write($oldKey, $old, 0600);
+            }
+            self::move($stagedKey, $this->privateKeyPath, $oldKey);
         }
         // Stopped between installing the key and the certificate.
         if ($this->matches($certificate, $this->privateKeyPath)) {
-            @rename($stagedCertificate, $this->certificatePath);
-            @unlink($this->privateKeyPath . '.old');
+            self::move($stagedCertificate, $this->certificatePath, $oldKey);
+            @unlink($oldKey);
+        }
+    }
+
+    private static function move(string $from, string $to, string $oldKey): void
+    {
+        if (!@rename($from, $to)) {
+            throw new ConfigurationException(sprintf(
+                'Cannot finish an interrupted save: cannot move "%s" to "%s". The old key is in "%s".',
+                $from,
+                $to,
+                $oldKey,
+            ));
         }
     }
 
