@@ -44,6 +44,40 @@ final class CredentialsTest extends TestCase
         Credentials::fromPem($pair['certificatePem'], $pair['privateKeyPem'], 'wrong');
     }
 
+    public function testEncryptedKeyWithoutPassphraseFailsWithoutPrompting(): void
+    {
+        // In a child process, so a prompt would show up in its output instead of waiting on this terminal.
+        $pair = $this->certs->newPair('secret');
+        file_put_contents($this->certs->dir . '/pair.json', json_encode($pair, JSON_THROW_ON_ERROR));
+        $script = $this->certs->dir . '/load.php';
+        file_put_contents($script, sprintf(<<<'PHP'
+            <?php
+            require %s;
+            $pair = json_decode(file_get_contents(%s), true);
+            try {
+                ETFusion\VARI\Credentials::fromPem($pair['certificatePem'], $pair['privateKeyPem']);
+                echo 'loaded';
+            } catch (ETFusion\VARI\Exception\ConfigurationException) {
+                echo 'refused';
+            }
+            PHP,
+            var_export(dirname(__DIR__) . '/vendor/autoload.php', true),
+            var_export($this->certs->dir . '/pair.json', true),
+        ));
+
+        $process = proc_open([PHP_BINARY, $script], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($process);
+        fclose($pipes[0]);
+        $output = stream_get_contents($pipes[1]);
+        $errors = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        proc_close($process);
+
+        self::assertSame('refused', $output);
+        self::assertStringNotContainsStringIgnoringCase('pass phrase', $errors);
+    }
+
     public function testKeyMustMatchCertificate(): void
     {
         $this->expectException(ConfigurationException::class);
