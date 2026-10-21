@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3 — Unreleased
+
+- `Credentials::fromPem()` refuses an encrypted key given without its passphrase straight away. OpenSSL used to ask for the passphrase on the terminal and wait.
+
 ## 1.0.2 — 2026-10-21
 
 - `CertificateRotation::run()` loads the new credentials back from the store before confirming, so the old certificate is never disabled while the store holds something the next process cannot read.

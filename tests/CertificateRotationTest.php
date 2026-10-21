@@ -48,7 +48,7 @@ final class CertificateRotationTest extends TestCase
     {
         $pair = KeyPair::generate('secret');
 
-        self::assertFalse(openssl_pkey_get_private($pair->privateKeyPem));
+        self::assertFalse(openssl_pkey_get_private($pair->privateKeyPem, ''));
         self::assertNotFalse(openssl_pkey_get_private($pair->privateKeyPem, 'secret'));
     }
 
@@ -100,7 +100,7 @@ final class CertificateRotationTest extends TestCase
         $saved = $store->load();
         self::assertSame($result->issued->certificatePem, $saved->certificatePem);
         self::assertSame('secret', $saved->passphrase);
-        self::assertFalse(openssl_pkey_get_private($saved->privateKeyPem), 'the new key is encrypted');
+        self::assertFalse(openssl_pkey_get_private($saved->privateKeyPem, ''), 'the new key is encrypted');
         self::assertSame('old', $result->retired->fingerprint);
         self::assertSame('/stable/v1/certificates/rotate/confirm', $this->api->request(1)->getUri()->getPath());
         self::assertSame($saved->certificatePem, $this->api->options(1)['curl'][CURLOPT_SSLCERT_BLOB], 'confirmed with the new certificate');

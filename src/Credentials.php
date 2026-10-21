@@ -42,7 +42,8 @@ final class Credentials
     ): self {
         CertificateValidity::parse($certificatePem);
 
-        $key = @openssl_pkey_get_private($privateKeyPem, $passphrase);
+        // Never null: without a passphrase OpenSSL asks for one on the terminal and waits.
+        $key = @openssl_pkey_get_private($privateKeyPem, $passphrase ?? '');
         $matches = $key !== false && @openssl_x509_check_private_key($certificatePem, $key);
         // Leave nothing behind for the next caller of openssl_error_string().
         while (openssl_error_string() !== false);
