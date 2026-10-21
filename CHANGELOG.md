@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.2 — Unreleased
+## 1.0.2 — 2026-10-21
 
 - `CertificateRotation::run()` loads the new credentials back from the store before confirming, so the old certificate is never disabled while the store holds something the next process cannot read.
 - `FileCredentialStore` locks a `.lock` file around `load()` and `save()`, so concurrent processes never read a half-replaced pair, and refuses to save a key its passphrase cannot read.
